@@ -43,6 +43,11 @@ public function consumers()
     return $this->hasMany(Consumer::class, 'billcollector_id');
 }
 
+public function details()
+{
+    return $this->hasOne(UserDetail::class);
+}
+
     /**
      * The attributes that should be hidden for serialization.
      *
