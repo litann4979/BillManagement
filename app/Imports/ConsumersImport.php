@@ -5,116 +5,201 @@ namespace App\Imports;
 use App\Models\Consumer;
 use App\Models\ConsumerMonthlyBill;
 use Illuminate\Support\Collection;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Maatwebsite\Excel\Concerns\ToCollection;
+use Maatwebsite\Excel\Concerns\WithChunkReading;
+use Maatwebsite\Excel\Concerns\WithStartRow;
 
-class ConsumersImport implements ToCollection
+class ConsumersImport implements ToCollection, WithChunkReading, WithStartRow, ShouldQueue
 {
     protected $billcollectorId;
+
+    // store headers
+    protected static $monthRow = null;
+    protected static $columnRow = null;
 
     public function __construct($billcollectorId = null)
     {
         $this->billcollectorId = $billcollectorId;
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Skip first 2 rows (headers)
+    |--------------------------------------------------------------------------
+    */
+
+    public function startRow(): int
+    {
+        return 1;
+    }
+
     public function collection(Collection $rows)
     {
-        $monthRow = $rows[0];   // row containing Apr-24, May-24...
-        $columnRow = $rows[1];  // row containing Opening Balance etc
-
-        // Find dynamic column positions for trailing fields
-        $closingBalanceIdx = null;
-        $cfyIdx = null;
-        $eclArrearIdx = null;
-
-        foreach ($columnRow as $idx => $header) {
-            $h = strtolower(trim($header ?? ''));
-            if (str_contains($h, 'closing') && str_contains($h, 'balance')) $closingBalanceIdx = $idx;
-            if ($h === 'cfy') $cfyIdx = $idx;
-            if (str_contains($h, 'ecl') && str_contains($h, 'arrear')) $eclArrearIdx = $idx;
+        // first chunk stores headers
+        if (self::$monthRow === null) {
+            self::$monthRow = $rows[0];
+            self::$columnRow = $rows[1];
+            $rows = $rows->slice(2);
         }
 
-        foreach ($rows->skip(2) as $row) {
+        $consumerRows = [];
+        $billRows = [];
+        $now = now();
 
-            if (!$row[2]) {
+        foreach ($rows as $row) {
+
+            $scno = $row[1] ?? null;
+
+            if (!$scno) {
                 continue;
             }
 
-            // Save consumer master data
-            $consumer = Consumer::updateOrCreate(
-                ['scno' => $row[2]],
-                [
-                    'billcollector_id' => $this->billcollectorId,
-                    'subdivision' => $row[0],
-                    'section' => $row[1],
-                    'name' => $row[3],
-                    'address_1' => $row[4] ?? null,
-                    'address_2' => $row[5] ?? null,
-                    'address_3' => $row[6] ?? null,
-                    'email' => $row[7] ?? null,
-                    'phone' => $row[8] ?? null,
-                    'gis_location' => $row[9] ?? null,
-                    'date_of_connection' => $row[10] ?? null,
-                    'dtr_name' => $row[11] ?? null,
-                    'dtr_code' => $row[12] ?? null,
-                    'bill_grp' => $row[13] ?? null,
-                    'category' => $row[14] ?? null,
-                    'meter_no' => $row[15] ?? null,
-                    'cd' => $row[16] ?? null,
-                    'closing_balance' => $closingBalanceIdx !== null ? ($row[$closingBalanceIdx] ?? null) : null,
-                    'cfy' => $cfyIdx !== null ? ($row[$cfyIdx] ?? null) : null,
-                    'ecl_arrear' => $eclArrearIdx !== null ? ($row[$eclArrearIdx] ?? null) : null,
-                ]
+            /*
+            |--------------------------------------------------------------------------
+            | Consumer Data
+            |--------------------------------------------------------------------------
+            */
+
+            $consumerRows[] = [
+
+                'scno' => $scno,
+                'billcollector_id' => $this->billcollectorId,
+
+                'subdivision' => $row[0] ?? null,
+                'section' => $row[0] ?? null,
+                'name' => $row[2] ?? null,
+
+                'bill_grp' => $row[3] ?? null,
+                'category' => $row[4] ?? null,
+
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Upsert Consumers
+        |--------------------------------------------------------------------------
+        */
+
+        if (!empty($consumerRows)) {
+
+            Consumer::upsert(
+                $consumerRows,
+                ['scno'],
+                ['billcollector_id','subdivision','section','name','bill_grp','category','updated_at']
             );
+        }
 
-            // Loop through columns to detect months
-            foreach ($monthRow as $index => $monthLabel) {
+        /*
+        |--------------------------------------------------------------------------
+        | Fetch Consumer IDs
+        |--------------------------------------------------------------------------
+        */
 
-                if (!$monthLabel) {
-                    continue;
-                }
+        $scnos = array_column($consumerRows, 'scno');
 
-                // Excel may store "Apr-24" as a date serial number — convert it back
+        $consumerMap = Consumer::whereIn('scno', $scnos)
+            ->pluck('id','scno')
+            ->toArray();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Process Monthly Bills
+        |--------------------------------------------------------------------------
+        */
+
+        foreach ($rows as $row) {
+
+            $scno = $row[1] ?? null;
+
+            if (!$scno || !isset($consumerMap[$scno])) {
+                continue;
+            }
+
+            $consumerId = $consumerMap[$scno];
+
+            foreach (self::$monthRow as $index => $monthLabel) {
+
+                if (!$monthLabel) continue;
+
                 if (is_numeric($monthLabel)) {
-                    try {
-                        $dateObj = \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($monthLabel);
-                        $monthLabel = $dateObj->format('M-y'); // e.g. "Apr-24"
-                    } catch (\Exception $e) {
-                        continue;
-                    }
+                    $dateObj = \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($monthLabel);
+                    $monthLabel = $dateObj->format('M-y');
                 }
 
                 if (!preg_match('/^[A-Za-z]{3}-\d{2}$/', $monthLabel)) {
                     continue;
                 }
 
-                $monthParts = explode('-', $monthLabel);
+                [$month,$year] = explode('-', $monthLabel);
 
-                $billMonth = $monthParts[0];
-                $billYear = '20' . $monthParts[1];
+                $billedUnits = null;
+                $billedAmount = null;
+                $paidAmount = null;
 
-                ConsumerMonthlyBill::create([
-                    'consumer_id' => $consumer->id,
-                    'bill_month' => $billMonth,
-                    'bill_year' => $billYear,
-                    'opening_balance' => $row[$index] ?? null,
-                    'bill_status' => $row[$index + 1] ?? null,
-                    'meter_status' => $row[$index + 2] ?? null,
-                    'billed_units' => $row[$index + 3] ?? null,
-                    'billed_amount' => $row[$index + 4] ?? null,
-                    'paid_amount' => $row[$index + 5] ?? null,
-                ]);
+                for ($i=0;$i<3;$i++) {
+
+                    $header = strtolower(trim(self::$columnRow[$index+$i] ?? ''));
+
+                    $value = $row[$index+$i] ?? null;
+
+                    if (str_contains($header,'billed')) {
+
+                        if (str_contains($header,'unit')) {
+                            $billedUnits = is_numeric($value) ? $value : null;
+                        }
+
+                        if (str_contains($header,'amount')) {
+                            $billedAmount = is_numeric($value) ? $value : null;
+                        }
+                    }
+
+                    if (str_contains($header,'paid')) {
+                        $paidAmount = is_numeric($value) ? $value : null;
+                    }
+                }
+
+                $billRows[] = [
+
+                    'consumer_id' => $consumerId,
+                    'bill_month' => $month,
+                    'bill_year' => '20'.$year,
+
+                    'billed_units' => $billedUnits,
+                    'billed_amount' => $billedAmount,
+                    'paid_amount' => $paidAmount,
+
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Insert Bills in Batches
+        |--------------------------------------------------------------------------
+        */
+
+        if (!empty($billRows)) {
+
+            foreach (array_chunk($billRows,1000) as $chunk) {
+                ConsumerMonthlyBill::insert($chunk);
             }
         }
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Chunk Size
+    |--------------------------------------------------------------------------
+    */
 
     public function chunkSize(): int
     {
-        return 1000; // reads 1000 rows at a time
-    }
-
-    public function batchSize(): int
-    {
-        return 1000; // insert 1000 rows per query
+        return 1000;
     }
 }

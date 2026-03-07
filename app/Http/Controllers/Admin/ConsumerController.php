@@ -40,8 +40,11 @@ class ConsumerController extends Controller
             $query->where('category', $request->category);
         }
 
-        $consumers = $query->latest()->paginate(15)->withQueryString();
+       $consumers = $query->orderBy('id', 'asc')
+                   ->paginate(15)
+                   ->withQueryString();
 
+                   
         $billRole = Role::where('name', 'billcollector')->first();
         $billCollectors = $billRole
             ? User::where('role_id', $billRole->id)->get(['id', 'name'])
@@ -141,18 +144,23 @@ class ConsumerController extends Controller
         return redirect()->route('consumers.index');
     }
 
-    public function import(Request $request)
-    {
-        $request->validate([
-            'file' => 'required|file|mimes:xlsx,xls,csv',
-            'billcollector_id' => 'required|exists:users,id',
-        ]);
+   public function import(Request $request)
+{
+    $request->validate([
+        'file' => 'required|file|mimes:xlsx,xls,csv',
+        'billcollector_id' => 'required|exists:users,id',
+    ]);
 
-        Excel::import(
-            new ConsumersImport($request->billcollector_id),
-            $request->file('file')
-        );
+    set_time_limit(0); // Essential for large files
 
-        return redirect()->route('consumers.index');
+    try {
+       Excel::queueImport(
+    new ConsumersImport($request->billcollector_id),
+    $request->file('file')
+);
+        return back()->with('success', 'Import finished successfully.');
+    } catch (\Exception $e) {
+        return back()->with('error', 'Import failed: ' . $e->getMessage());
     }
+}
 }
