@@ -11,9 +11,9 @@ export default function Welcome() {
     useEffect(() => {
         setMounted(true);
         const handleScroll = () => setScrolled(window.scrollY > 20);
-        
+
         window.addEventListener('scroll', handleScroll);
-        
+
         const interval = setInterval(() => {
             setActiveFeature((prev) => (prev + 1) % 4);
         }, 3000);
@@ -35,7 +35,7 @@ export default function Welcome() {
                     rel="stylesheet"
                 />
             </Head>
-            
+
             <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 font-['Inter']">
                 {/* Static/Gently Animated Background Blobs (No Mouse Tracking) */}
                 <div className="fixed inset-0 pointer-events-none overflow-hidden">
@@ -59,8 +59,8 @@ export default function Welcome() {
 
                 {/* Navigation */}
                 <header className={`fixed top-0 w-full z-50 transition-all duration-500 ${
-                    scrolled 
-                        ? 'bg-white/90 dark:bg-gray-900/90 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.05)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.2)]' 
+                    scrolled
+                        ? 'bg-white/90 dark:bg-gray-900/90 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.05)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.2)]'
                         : 'bg-transparent'
                 }`}>
                     <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -107,19 +107,19 @@ export default function Welcome() {
                                     Enterprise-Grade Utility Management
                                 </span>
                             </div>
-                            
-                            <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold mb-6">
+
+                            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-4">
                                 <span className="bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300 bg-clip-text text-transparent">
-                                    Electricity Bill
+                                    Power Distribution Performance
                                 </span>
                                 <br />
                                 <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                                    Management System
+                                    Management System (PDPM)
                                 </span>
                             </h1>
-                            
+
                             <p className="text-xl sm:text-2xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
-                                Streamline your utility operations with our intelligent billing platform. 
+                                Streamline your utility operations with our intelligent billing platform.
                                 <span className="block mt-2 text-lg text-slate-500 dark:text-slate-500">
                                     Real-time monitoring, automated calculations, and predictive analytics at your fingertips.
                                 </span>
@@ -138,7 +138,7 @@ export default function Welcome() {
                                     </span>
                                     <div className="absolute inset-0 bg-gradient-to-r from-blue-700 to-indigo-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                                 </Link>
-                                
+
                                 <button className="group relative inline-flex items-center px-8 py-4 rounded-2xl bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-slate-300 font-semibold text-lg hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 hover:-translate-y-1 shadow-xl">
                                     Watch Demo
                                     <svg className="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -196,8 +196,8 @@ export default function Welcome() {
                                                 <div
                                                     key={index}
                                                     className={`group relative p-6 rounded-2xl cursor-pointer transition-all duration-300 ${
-                                                        activeFeature === index 
-                                                            ? 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 scale-[1.02] shadow-lg' 
+                                                        activeFeature === index
+                                                            ? 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 scale-[1.02] shadow-lg'
                                                             : 'hover:bg-slate-50 dark:hover:bg-gray-700/50'
                                                     }`}
                                                     onMouseEnter={() => setActiveFeature(index)}
@@ -268,7 +268,7 @@ export default function Welcome() {
                                                                 <span className="font-medium text-slate-900 dark:text-white">{item.value}%</span>
                                                             </div>
                                                             <div className="h-2 bg-slate-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                                                                <div 
+                                                                <div
                                                                     className={`h-full bg-${item.color}-500 rounded-full transition-all duration-1000`}
                                                                     style={{ width: `${item.value}%` }}
                                                                 ></div>
@@ -312,7 +312,7 @@ export default function Welcome() {
                 </main>
             </div>
 
-           
+
         </>
     );
 }

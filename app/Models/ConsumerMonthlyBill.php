@@ -22,15 +22,16 @@ class ConsumerMonthlyBill extends Model
 
         'billed_amount',
 
-        'paid_amount'
+        'paid_amount',
+        'bill_period',
     ];
 
     protected $casts = [
-
         'opening_balance' => 'decimal:2',
         'billed_units' => 'integer',
         'billed_amount' => 'decimal:2',
-        'paid_amount' => 'decimal:2'
+        'paid_amount' => 'decimal:2',
+        'bill_period' => 'date',
     ];
 
     /**
@@ -40,4 +41,9 @@ class ConsumerMonthlyBill extends Model
     {
         return $this->belongsTo(Consumer::class);
     }
+
+    public function payments()
+{
+    return $this->hasMany(Payment::class,'bill_id');
+}
 }
