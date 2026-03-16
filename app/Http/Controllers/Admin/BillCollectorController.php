@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Payment;
 use App\Models\User;
 use App\Models\Role;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Inertia\Inertia;
 
@@ -13,16 +15,37 @@ class BillCollectorController extends Controller
 {
     public function index()
     {
-        $billRole = Role::where('name','billcollector')->first();
+        $billRole = Role::where('name', 'billcollector')->first();
 
-        $billCollectors = User::where('role_id',$billRole->id)
-            ->with(['role','details'])
+        $collectionStats = Payment::select('collected_by')
+            ->selectRaw('SUM(payment_amount) as total_collection')
+            ->selectRaw('COUNT(*) as bill_count')
+            ->groupBy('collected_by')
+            ->get()
+            ->keyBy('collected_by');
+
+        $billCollectors = User::where('role_id', $billRole->id)
+            ->with(['role', 'details'])
             ->latest()
-            ->get();
+            ->get()
+            ->map(function ($collector) use ($collectionStats) {
+                $stats = $collectionStats->get($collector->id);
+                $collector->total_collection = $stats ? (float) $stats->total_collection : 0;
+                $collector->bill_count = $stats ? (int) $stats->bill_count : 0;
+                return $collector;
+            });
 
-        return Inertia::render('admin/billcollectors/index',[
-    'billCollectors'=>$billCollectors
-]);
+        $activeCollectors = $billCollectors->where('is_active', true)->count();
+        $inactiveCollectors = $billCollectors->where('is_active', false)->count();
+        $totalCollections = Payment::sum('payment_amount');
+
+        return Inertia::render('admin/billcollectors/index', [
+            'billCollectors' => $billCollectors,
+            'totalCollectors' => $billCollectors->count(),
+            'activeCollectors' => $activeCollectors,
+            'inactiveCollectors' => $inactiveCollectors,
+            'totalCollections' => (float) $totalCollections,
+        ]);
     }
 
     public function create()
@@ -111,6 +134,14 @@ class BillCollectorController extends Controller
                 'date_of_birth'  => $request->date_of_birth,
             ]
         );
+
+        return redirect()->route('billcollectors.index');
+    }
+
+    public function toggleStatus($id)
+    {
+        $user = User::findOrFail($id);
+        $user->update(['is_active' => !$user->is_active]);
 
         return redirect()->route('billcollectors.index');
     }

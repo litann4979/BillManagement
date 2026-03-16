@@ -48,6 +48,16 @@ public function details()
     return $this->hasOne(UserDetail::class);
 }
 
+public function visitPlans()
+{
+    return $this->hasMany(VisitPlan::class,'billcollector_id');
+}
+
+public function payments()
+{
+    return $this->hasMany(Payment::class, 'collected_by');
+}
+
     /**
      * The attributes that should be hidden for serialization.
      *
