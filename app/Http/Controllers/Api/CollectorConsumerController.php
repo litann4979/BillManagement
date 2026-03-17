@@ -21,6 +21,7 @@ public function index(Request $request)
             'categoryRelation:id,name'
         ]);
 
+    // 🔍 SEARCH
     if ($search = $request->search) {
         $query->where(function ($q) use ($search) {
             $q->where('scno', 'like', "%{$search}%")
@@ -29,10 +30,12 @@ public function index(Request $request)
         });
     }
 
+    // 📅 MONTH FORMAT
     $monthName = $request->month
         ? date('M', mktime(0, 0, 0, (int)$request->month, 10))
         : null;
 
+    // 🔎 FILTER BY BILL CONDITIONS
     if ($request->status || $request->month || $request->year) {
         $query->whereHas('monthlyBills', function ($q) use ($request, $monthName) {
 
@@ -50,35 +53,52 @@ public function index(Request $request)
         });
     }
 
-    // get consumer ids
-    $consumerIds = (clone $query)->pluck('id');
+    /*
+    |--------------------------------------------------------------------------
+    | 🔥 OPTIMIZED SUMMARY (NO PLUCK, NO MEMORY LOAD)
+    |--------------------------------------------------------------------------
+    */
 
-    // bill summary
-    $billQuery = ConsumerMonthlyBill::whereIn('consumer_id', $consumerIds);
+    $summary = ConsumerMonthlyBill::whereIn('consumer_id', function ($q) use ($user, $request) {
 
-    if ($monthName) {
-        $billQuery->where('bill_month', $monthName);
-    }
+            $q->select('id')
+              ->from('consumers')
+              ->where('billcollector_id', $user->id);
 
-    if ($request->year) {
-        $billQuery->where('bill_year', $request->year);
-    }
+            // apply search filter
+            if ($request->search) {
+                $q->where(function ($sub) use ($request) {
+                    $sub->where('scno', 'like', "%{$request->search}%")
+                        ->orWhere('meter_no', 'like', "%{$request->search}%")
+                        ->orWhere('name', 'like', "%{$request->search}%");
+                });
+            }
 
-    $summary = (clone $billQuery)->select(
-        DB::raw("COUNT(CASE WHEN bill_status = 'paid' THEN 1 END) as total_paid"),
-        DB::raw("COUNT(CASE WHEN bill_status = 'unpaid' THEN 1 END) as total_unpaid"),
-        DB::raw("COUNT(CASE WHEN bill_status = 'partial' THEN 1 END) as total_partial"),
-        DB::raw("COUNT(CASE WHEN bill_status = 'overdue' THEN 1 END) as total_overdue"),
-        DB::raw("COALESCE(SUM(paid_amount),0) as total_paid_amount")
-    )->first();
+        })
+        ->when($monthName, fn($q) => $q->where('bill_month', $monthName))
+        ->when($request->year, fn($q) => $q->where('bill_year', $request->year))
+        ->selectRaw("
+            COUNT(DISTINCT CASE WHEN bill_status = 'paid' THEN consumer_id END) as total_paid,
+            COUNT(DISTINCT CASE WHEN bill_status = 'unpaid' THEN consumer_id END) as total_unpaid,
+            COUNT(DISTINCT CASE WHEN bill_status = 'partial' THEN consumer_id END) as total_partial,
+            COUNT(DISTINCT CASE WHEN bill_status = 'overdue' THEN consumer_id END) as total_overdue,
+            COALESCE(SUM(paid_amount),0) as total_paid_amount
+        ")
+        ->first();
+
+    /*
+    |--------------------------------------------------------------------------
+    | 📊 PAGINATION
+    |--------------------------------------------------------------------------
+    */
 
     $consumers = $query->paginate(20);
 
     $data = $consumers->getCollection()->map(function ($consumer) {
-
         return [
             'id' => $consumer->id,
             'name' => $consumer->name,
+            'scno' => $consumer->scno,
             'address_1' => $consumer->address_1,
             'address_2' => $consumer->address_2,
             'address_3' => $consumer->address_3,
@@ -93,9 +113,15 @@ public function index(Request $request)
         ];
     });
 
+    /*
+    |--------------------------------------------------------------------------
+    | ✅ FINAL RESPONSE (UNCHANGED)
+    |--------------------------------------------------------------------------
+    */
+
     return response()->json([
         'status' => true,
-        'total_consumers' => $consumerIds->count(),
+        'total_consumers' => $query->count(), // ✅ FIXED
         'total_paid' => (int) $summary->total_paid,
         'total_unpaid' => (int) $summary->total_unpaid,
         'total_partial' => (int) $summary->total_partial,
@@ -107,7 +133,7 @@ public function index(Request $request)
     ]);
 }
 
-    public function show(Request $request, $id)
+public function show(Request $request, $id)
 {
     $monthFilter = $request->month;
     $yearFilter  = $request->year;
@@ -128,6 +154,7 @@ public function index(Request $request)
 
             'arrear:id,consumer_id,total_arrear,months_due,last_bill_period',
 
+            // FILTERED bills (for UI display)
             'monthlyBills' => function ($q) use ($monthName, $yearFilter, $status) {
 
                 if ($status) {
@@ -162,6 +189,66 @@ public function index(Request $request)
         ], 404);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | 🔥 PRODUCTION SAFE AGGREGATIONS (NO COLLECTION LOAD)
+    |--------------------------------------------------------------------------
+    */
+
+    // BILLING SUMMARY
+    $billingSummary = ConsumerMonthlyBill::where('consumer_id', $consumer->id)
+        ->selectRaw('
+            MIN(bill_period) as first_bill_period,
+            COUNT(*) as total_billing_months,
+            SUM(billed_amount) as total_billed_amount
+        ')
+        ->first();
+
+    // COLLECTION SUMMARY (paid_amount > 0)
+    $collectionSummary = ConsumerMonthlyBill::where('consumer_id', $consumer->id)
+        ->where('paid_amount', '>', 0)
+        ->selectRaw('
+            MIN(bill_period) as first_collection_period,
+            COUNT(*) as total_collection_months,
+            SUM(paid_amount) as total_collected_amount
+        ')
+        ->first();
+
+    /*
+    |--------------------------------------------------------------------------
+    | FORMAT DATES (Month Year)
+    |--------------------------------------------------------------------------
+    */
+
+    $billSince = $billingSummary->first_bill_period
+        ? \Carbon\Carbon::parse($billingSummary->first_bill_period)->format('M Y')
+        : null;
+
+    $collectionSince = $collectionSummary->first_collection_period
+        ? \Carbon\Carbon::parse($collectionSummary->first_collection_period)->format('M Y')
+        : null;
+
+    /*
+    |--------------------------------------------------------------------------
+    | BALANCE CALCULATIONS
+    |--------------------------------------------------------------------------
+    */
+
+    $totalBillingMonths   = (int) ($billingSummary->total_billing_months ?? 0);
+    $totalBilledAmount   = (float) ($billingSummary->total_billed_amount ?? 0);
+
+    $totalCollectionMonths = (int) ($collectionSummary->total_collection_months ?? 0);
+    $totalCollectedAmount  = (float) ($collectionSummary->total_collected_amount ?? 0);
+
+    $balanceRecords = $totalBillingMonths - $totalCollectionMonths;
+    $balanceAmount  = $totalBilledAmount - $totalCollectedAmount;
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESPONSE
+    |--------------------------------------------------------------------------
+    */
+
     return response()->json([
         'status' => true,
         'data' => [
@@ -178,10 +265,10 @@ public function index(Request $request)
 
             'phone' => $consumer->phone,
             'email' => $consumer->email,
-
             'meter_no' => $consumer->meter_no,
 
             'date_of_connection' => $consumer->date_of_connection?->format('Y-m-d'),
+
             'closing_balance' => $consumer->closing_balance,
             'cfy' => $consumer->cfy,
             'ecl_arrear' => $consumer->ecl_arrear,
@@ -189,6 +276,28 @@ public function index(Request $request)
             'arrear_amount' => $consumer->arrear->total_arrear ?? 0,
             'months_due' => $consumer->arrear->months_due ?? 0,
 
+            /*
+            |--------------------------------------------------------------------------
+            | 🔥 NEW ANALYTICS
+            |--------------------------------------------------------------------------
+            */
+
+            'bill_since' => $billSince,
+            'total_billing_months' => $totalBillingMonths,
+            'total_billed_amount' => $totalBilledAmount,
+
+            'collection_since' => $collectionSince,
+            'total_collection_months' => $totalCollectionMonths,
+            'total_collected_amount' => $totalCollectedAmount,
+
+            'balance_records' => $balanceRecords,
+            'balance_amount' => $balanceAmount,
+
+            /*
+            |--------------------------------------------------------------------------
+            | EXISTING DATA
+            |--------------------------------------------------------------------------
+            */
 
             'monthly_bills' => $consumer->monthlyBills,
             'active_defaults' => $consumer->defaulters,
